@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,12 +83,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "User not authorized to upload thumbnail for this video", nil)
 		return
 	}
-	videoThumbnails[videoID] = thumbnail{
-		data:      imgData,
-		mediaType: mimeType,
-	}
-	var videoThumnnailUrl = fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	vd.ThumbnailURL = &videoThumnnailUrl
+	//Store image in the sqllite db
+	var encodedImgBlob = base64.StdEncoding.EncodeToString(imgData)
+	var dataUrl = fmt.Sprintf("data:%s;base64,%s", mimeType, encodedImgBlob)
+
+	vd.ThumbnailURL = &dataUrl
 
 	err = cfg.db.UpdateVideo(vd)
 	if err != nil {
