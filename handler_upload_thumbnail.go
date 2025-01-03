@@ -64,6 +64,10 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	fileExt := exts[0]
 
+	if fileExt != ".jpeg" && fileExt != ".png" {
+		respondWithError(w, http.StatusBadRequest, "Unsupported file type", nil)
+		return
+	}
 	// Build file path
 	filePath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s%s", videoID, fileExt))
 
