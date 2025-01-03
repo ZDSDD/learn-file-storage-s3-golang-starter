@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -17,7 +19,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid ID", err)
+		respondWithError(w, http.StatusBadRequest, "Invalid video ID", err)
 		return
 	}
 
@@ -43,51 +45,57 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	file, head, err := r.FormFile("thumbnail")
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error forming file", err)
+		respondWithError(w, http.StatusInternalServerError, "Error reading uploaded file", err)
 		return
 	}
 	defer file.Close()
 
-	// Check Content-Type header
 	contentType := head.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "image/") {
-		fmt.Println("File is an image:", contentType)
-	} else if strings.HasPrefix(contentType, "video/") {
-		fmt.Println("File is a video:", contentType)
-	} else {
-		respondWithError(w, http.StatusBadRequest, "Unsupported file type", nil)
+	if !strings.HasPrefix(contentType, "image/") {
+		respondWithError(w, http.StatusBadRequest, "Only image uploads are supported", nil)
 		return
 	}
 
-	// Optional: Inspect file bytes for robust type detection
-	imgData, err := io.ReadAll(file)
+	// Determine file extension from content type
+	exts, _ := mime.ExtensionsByType(contentType)
+	if len(exts) == 0 {
+		respondWithError(w, http.StatusBadRequest, "Unsupported file type", nil)
+		return
+	}
+	fileExt := exts[0]
+
+	// Build file path
+	filePath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s%s", videoID, fileExt))
+
+	// Create and save file to the filesystem
+	outputFile, err := os.Create(filePath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error when reading data from the file", err)
+		respondWithError(w, http.StatusInternalServerError, "Error creating file on disk", err)
+		return
+	}
+	defer outputFile.Close()
+
+	_, err = io.Copy(outputFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file to disk", err)
 		return
 	}
 
-	mimeType := http.DetectContentType(imgData)
-	fmt.Println("Detected MIME type:", mimeType)
-
-	// Validate MIME type (if required)
-	if !strings.HasPrefix(mimeType, "image/") && !strings.HasPrefix(mimeType, "video/") {
-		respondWithError(w, http.StatusBadRequest, "Unsupported file type", nil)
-		return
-	}
+	// Update video thumbnail URL
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, videoID, fileExt)
+	fmt.Printf(">>> saved as: %s", thumbnailURL)
 	vd, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error fetching video from database", err)
 		return
 	}
+
 	if vd.UserID != userID {
 		respondWithError(w, http.StatusUnauthorized, "User not authorized to upload thumbnail for this video", nil)
 		return
 	}
-	//Store image in the sqllite db
-	var encodedImgBlob = base64.StdEncoding.EncodeToString(imgData)
-	var dataUrl = fmt.Sprintf("data:%s;base64,%s", mimeType, encodedImgBlob)
 
-	vd.ThumbnailURL = &dataUrl
+	vd.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(vd)
 	if err != nil {
